@@ -1,33 +1,88 @@
 import React, { useRef, useState, useEffect } from 'react';
 import axios from 'axios';
 import { useParams, useNavigate } from 'react-router-dom';
-import { heritageSites } from '../data/heritageSites';
+import { calculateDistance } from '../utils/distance';
+// import { heritageSites } from '../data/heritageSites';
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-import { calculateDistance } from '../utils/distance';
 
 const SiteDetailsPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const siteData = heritageSites[id];
+  const [siteData, setSiteData] = useState(null);
+  const [isSiteLoading, setIsSiteLoading] = useState(true);
 
   const galleryRef = useRef(null);
   const [distanceData, setDistanceData] = useState(null);
+  const [haversineDistance, setHaversineDistance] = useState(null);
   const [placeData, setPlaceData] = useState(null);
   const [mapsError, setMapsError] = useState(null);
   const [isMapsLoading, setIsMapsLoading] = useState(true);
   const [showAllReviews, setShowAllReviews] = useState(false);
-  const [nearbyPlaces, setNearbyPlaces] = useState({ restaurant: null, hotel: null, hospital: null });
+  const [nearbyPlaces, setNearbyPlaces] = useState({ restaurant: null, hotel: null, shopping: null, park: null });
   const [isNearbyLoading, setIsNearbyLoading] = useState(true);
   const [userLocation, setUserLocation] = useState(null);
 
-  useEffect(() => {
-    // If invalid ID is accessed directly, bounce them back to sites
-    if (!siteData) {
-      navigate('/sites');
+  const [reviewText, setReviewText] = useState("");
+  const [reviewRating, setReviewRating] = useState(5);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+
+  const handleReviewSubmit = async (e) => {
+    e.preventDefault();
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    if (!token) {
+      alert("Please log in to submit a review.");
       return;
     }
+    if (!reviewText.trim()) return;
+
+    try {
+      setIsSubmittingReview(true);
+      const res = await axios.post(`${API_URL}/api/sites/${id}/reviews/`, {
+        text: reviewText,
+        rating: reviewRating
+      }, {
+        headers: { Authorization: `Token ${token}` }
+      });
+      
+      setSiteData({
+        ...siteData,
+        local_reviews: [res.data, ...(siteData.local_reviews || [])]
+      });
+      setReviewText("");
+      setReviewRating(5);
+    } catch (err) {
+      console.error("Failed to submit review", err);
+      alert("Failed to submit review. Please try again.");
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
+  // 1. Fetch backend site data
+  useEffect(() => {
+    let isMounted = true;
+    const fetchSite = async () => {
+      try {
+        setIsSiteLoading(true);
+        const res = await axios.get(`${API_URL}/api/sites/${id}/`);
+        if (isMounted) setSiteData(res.data);
+      } catch (err) {
+        console.error("Failed to fetch site data:", err);
+        if (isMounted) navigate('/sites');
+      } finally {
+        if (isMounted) setIsSiteLoading(false);
+      }
+    };
+    fetchSite();
+    return () => { isMounted = false; };
+  }, [id, navigate]);
+
+  // 2. Fetch maps data when siteData is ready
+  useEffect(() => {
+    if (!siteData) return;
 
     let isMounted = true;
     const fetchMapsData = async () => {
@@ -46,27 +101,51 @@ const SiteDetailsPage = () => {
           setPlaceData(placeRes.data.result);
         }
 
-        // 1.5 Fetch Nearby Places (Restaurant, Hotel, Hospital)
+        // 1.5 Fetch Nearby Places (Restaurant, Hotel, Shopping, Park)
         setIsNearbyLoading(true);
-        const types = ['restaurant', 'lodging', 'hospital'];
+        const types = ['restaurant', 'lodging', 'shopping_mall', 'park'];
         const nearbyPromises = types.map(type =>
           axios.get(`/google-maps-api/maps/api/place/nearbysearch/json?location=${siteData.latLng}&radius=3000&type=${type}&key=${API_KEY}`)
-            .then(res => res.data.status === "OK" ? res.data.results[0] : null)
-            .catch(() => null)
+            .then(res => res.data.status === "OK" ? res.data.results : [])
+            .catch(() => [])
         );
-        const [restaurant, hotel, hospital] = await Promise.all(nearbyPromises);
+        const [restaurantResults, hotelResults, shoppingResults, parkResults] = await Promise.all(nearbyPromises);
+        
+        const usedPlaceIds = new Set();
+        const pickUniquePlace = (results) => {
+          for (const place of results) {
+            if (!usedPlaceIds.has(place.place_id)) {
+              usedPlaceIds.add(place.place_id);
+              return place;
+            }
+          }
+          return null;
+        };
+
+        const restaurant = pickUniquePlace(restaurantResults);
+        const hotel = pickUniquePlace(hotelResults);
+        const shopping = pickUniquePlace(shoppingResults);
+        const park = pickUniquePlace(parkResults);
+
         if (isMounted) {
-          setNearbyPlaces({ restaurant, hotel, hospital });
+          setNearbyPlaces({ restaurant, hotel, shopping, park });
         }
 
-        // 2. Fetch Distance Matrix (if geolocation available)
+        // 2. Fetch Distance Matrix + Haversine (if geolocation available)
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
             async (position) => {
-              const originLatLng = `${position.coords.latitude},${position.coords.longitude}`;
+              const { latitude, longitude } = position.coords;
+              const originLatLng = `${latitude},${longitude}`;
               if (isMounted) setUserLocation(originLatLng);
-              const distUrl = `/google-maps-api/maps/api/distancematrix/json?origins=${originLatLng}&destinations=${siteData.latLng}&key=${API_KEY}`;
 
+              // Haversine distance — same formula used on site cards
+              const [siteLat, siteLng] = siteData.latLng.split(',').map(Number);
+              const hDist = calculateDistance(latitude, longitude, siteLat, siteLng);
+              if (isMounted) setHaversineDistance(hDist);
+
+              // Road distance from Distance Matrix API (supplementary)
+              const distUrl = `/google-maps-api/maps/api/distancematrix/json?origins=${originLatLng}&destinations=${siteData.latLng}&key=${API_KEY}`;
               try {
                 const distRes = await axios.get(distUrl);
                 if (distRes.data.status !== "OK") {
@@ -98,6 +177,51 @@ const SiteDetailsPage = () => {
     return () => { isMounted = false; };
   }, [id, navigate, siteData]);
 
+  const renderNearbyCard = (place, icon, defaultTitle, defaultDesc) => {
+    return (
+      <div className="bg-surface-container-low border border-transparent hover:border-outline-variant transition-colors group cursor-pointer flex flex-col relative overflow-hidden h-full rounded-xl shadow-sm">
+        {place?.photos?.[0] ? (
+          <div className="h-48 w-full overflow-hidden relative">
+            <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent transition-colors duration-500 z-10"></div>
+            <img 
+              src={`https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${place.photos[0].photo_reference}&key=${API_KEY}`} 
+              alt={place?.name || defaultTitle} 
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
+            />
+            <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-sm p-2 rounded-full z-20 shadow-sm">
+              <span className="material-symbols-outlined text-primary text-sm block">{icon}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="h-48 w-full bg-surface-variant/30 flex items-center justify-center relative">
+            <span className="material-symbols-outlined text-5xl text-on-surface-variant/30">{icon}</span>
+          </div>
+        )}
+        <div className="p-6 flex flex-col flex-grow">
+          <h3 className="font-headline text-xl italic mb-2 relative z-10 line-clamp-1">{place ? place.name : defaultTitle}</h3>
+          <p className="text-xs font-light text-on-surface-variant leading-relaxed mb-4 relative z-10">{defaultDesc}</p>
+          {place && (
+            <div className="flex items-center justify-between mt-auto relative z-10 w-full">
+              {place.rating && (
+                <div className="flex items-center text-xs font-bold tracking-widest text-secondary"><span className="material-symbols-outlined text-[14px] mr-1">star</span>{place.rating}</div>
+              )}
+              <div className="flex items-center text-[10px] font-bold tracking-widest text-on-surface-variant opacity-80 uppercase ml-auto"><span className="material-symbols-outlined text-[12px] mr-1">location_on</span>{getDistanceText(place)}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  if (isSiteLoading) {
+    return (
+      <div className="min-h-screen bg-surface flex items-center justify-center font-headline text-2xl italic text-on-surface">
+        <span className="material-symbols-outlined animate-spin mr-3">progress_activity</span>
+        Unearthing history...
+      </div>
+    );
+  }
+
   if (!siteData) return null; // Prevent flash before redirect
 
   const getDistanceText = (place) => {
@@ -120,6 +244,8 @@ const SiteDetailsPage = () => {
 
   const themeText = siteData.theme.textRoot;
   const themeBorder = siteData.theme.borderLight;
+  const metricText = siteData.metricTextColor || themeText;
+  const subtitleText = siteData.heroSubtitleColor || themeText;
 
   return (
     <div className="font-body text-on-surface bg-surface min-h-screen">
@@ -141,7 +267,7 @@ const SiteDetailsPage = () => {
             <h1 className={`font-headline text-6xl md:text-8xl lg:text-[130px] italic leading-tight md:leading-none mb-6 drop-shadow-lg ${siteData.heroTitleWeight || 'font-bold'} ${siteData.heroTitleColor || themeText}`}>
               {siteData.title[0]} <br /> {siteData.title[1]}
             </h1>
-            <p className={`text-xl md:text-2xl font-light opacity-100 max-w-2xl mb-16 tracking-wide drop-shadow-md ${themeText}`}>
+            <p className={`text-xl md:text-2xl font-light opacity-100 max-w-2xl mb-16 tracking-wide drop-shadow-md ${subtitleText}`}>
               {siteData.subtitle}
             </p>
 
@@ -149,8 +275,8 @@ const SiteDetailsPage = () => {
               <div className={`grid grid-cols-2 md:grid-cols-${siteData.metrics.length > 3 ? '4' : '3'} gap-8 md:gap-12 pt-10 border-t ${themeBorder}`}>
                 {siteData.metrics.map((metric, idx) => (
                   <div key={idx} className={metric.span ? "col-span-2 md:col-span-1 border-t md:border-transparent pt-6 md:pt-0" : ""}>
-                    <p className={`text-[10px] tracking-widest uppercase opacity-90 mb-2 font-bold ${themeText}`}>{metric.label}</p>
-                    <p className={`font-headline italic text-3xl font-medium drop-shadow-sm ${themeText}`}>{metric.value}</p>
+                    <p className={`text-[10px] tracking-widest uppercase opacity-90 mb-2 font-bold ${metricText}`}>{metric.label}</p>
+                    <p className={`font-headline italic text-3xl font-medium drop-shadow-sm ${metricText}`}>{metric.value}</p>
                   </div>
                 ))}
               </div>
@@ -236,11 +362,16 @@ const SiteDetailsPage = () => {
               <span className="material-symbols-outlined mt-1">location_on</span>
               <div>
                 <p className="text-[10px] tracking-widest uppercase text-on-surface-variant mb-1">
-                  {distanceData ? "FROM YOUR LOCATION" : "FROM CITY CENTER"}
+                  {haversineDistance ? "FROM YOUR LOCATION" : "FROM CITY CENTER"}
                 </p>
                 <p className="font-headline text-2xl italic text-on-surface mb-2">
-                  {distanceData ? `${distanceData.distance.text} (${distanceData.duration.text})` : "Approx. 3.5 km"}
+                  {haversineDistance ? `${haversineDistance} km away` : "Approx. 3.5 km"}
                 </p>
+                {distanceData && (
+                  <p className="text-xs text-on-surface-variant mb-2 font-light">
+                    🚗 {distanceData.distance.text} by road · {distanceData.duration.text}
+                  </p>
+                )}
                 <p className="text-sm font-light text-on-surface-variant">{siteData.address}</p>
               </div>
             </div>
@@ -282,47 +413,11 @@ const SiteDetailsPage = () => {
             Extracting Local Insights...
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {/* Restaurant */}
-            <div className="bg-surface-container-low p-8 border border-transparent hover:border-outline-variant transition-colors group cursor-pointer flex flex-col relative overflow-hidden">
-              <span className="material-symbols-outlined mb-8 text-on-surface-variant group-hover:text-primary transition-colors relative z-10">restaurant_menu</span>
-              <h3 className="font-headline text-2xl italic mb-3 relative z-10">{nearbyPlaces.restaurant ? nearbyPlaces.restaurant.name : "Local Dining"}</h3>
-              <p className="text-sm font-light text-on-surface-variant leading-relaxed mb-4 relative z-10">Top rated local dining spot located nearby.</p>
-              {nearbyPlaces.restaurant && (
-                <div className="flex items-center justify-between mt-auto relative z-10 w-full">
-                  {nearbyPlaces.restaurant.rating && (
-                    <div className="flex items-center text-xs font-bold tracking-widest text-secondary"><span className="material-symbols-outlined text-[14px] mr-1">star</span>{nearbyPlaces.restaurant.rating}</div>
-                  )}
-                  <div className="flex items-center text-[10px] font-bold tracking-widest text-on-surface-variant opacity-80 uppercase ml-auto"><span className="material-symbols-outlined text-[12px] mr-1">location_on</span>{getDistanceText(nearbyPlaces.restaurant)}</div>
-                </div>
-              )}
-            </div>
-            {/* Hotel */}
-            <div className="bg-surface-container-low p-8 border border-transparent hover:border-outline-variant transition-colors group cursor-pointer flex flex-col relative overflow-hidden">
-              <span className="material-symbols-outlined mb-8 text-on-surface-variant group-hover:text-primary transition-colors relative z-10">bed</span>
-              <h3 className="font-headline text-2xl italic mb-3 relative z-10">{nearbyPlaces.hotel ? nearbyPlaces.hotel.name : "Local Lodging"}</h3>
-              {nearbyPlaces.hotel && (
-                <div className="flex items-center justify-between mt-auto relative z-10 w-full">
-                  {nearbyPlaces.hotel.rating && (
-                    <div className="flex items-center text-xs font-bold tracking-widest text-secondary"><span className="material-symbols-outlined text-[14px] mr-1">star</span>{nearbyPlaces.hotel.rating}</div>
-                  )}
-                  <div className="flex items-center text-[10px] font-bold tracking-widest text-on-surface-variant opacity-80 uppercase ml-auto"><span className="material-symbols-outlined text-[12px] mr-1">location_on</span>{getDistanceText(nearbyPlaces.hotel)}</div>
-                </div>
-              )}
-            </div>
-            {/* Hospital */}
-            <div className="bg-surface-container-low p-8 border border-transparent hover:border-outline-variant transition-colors group cursor-pointer flex flex-col relative overflow-hidden">
-              <span className="material-symbols-outlined mb-8 text-on-surface-variant group-hover:text-primary transition-colors relative z-10">local_hospital</span>
-              <h3 className="font-headline text-2xl italic mb-3 relative z-10">{nearbyPlaces.hospital ? nearbyPlaces.hospital.name : "Local Hospital"}</h3>
-              {nearbyPlaces.hospital && (
-                <div className="flex items-center justify-between mt-auto relative z-10 w-full">
-                  {nearbyPlaces.hospital.rating && (
-                    <div className="flex items-center text-xs font-bold tracking-widest text-secondary"><span className="material-symbols-outlined text-[14px] mr-1">star</span>{nearbyPlaces.hospital.rating}</div>
-                  )}
-                  <div className="flex items-center text-[10px] font-bold tracking-widest text-on-surface-variant opacity-80 uppercase ml-auto"><span className="material-symbols-outlined text-[12px] mr-1">location_on</span>{getDistanceText(nearbyPlaces.hospital)}</div>
-                </div>
-              )}
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+            {renderNearbyCard(nearbyPlaces.restaurant, "restaurant_menu", "Local Dining", "Top rated local dining spot located nearby.")}
+            {renderNearbyCard(nearbyPlaces.hotel, "bed", "Local Lodging", "Comfortable stays for your visit.")}
+            {renderNearbyCard(nearbyPlaces.shopping, "shopping_bag", "Shopping Mall", "Discover local markets and retail stores.")}
+            {renderNearbyCard(nearbyPlaces.park, "park", "Local Park", "Relax in nearby green spaces.")}
           </div>
         )}
       </section>
@@ -370,6 +465,74 @@ const SiteDetailsPage = () => {
         ) : (
           <div className="py-8 text-on-surface-variant text-sm">No reviews available.</div>
         )}
+
+        <div className="mt-20 border-t border-outline-variant pt-16">
+          <h3 className="font-headline text-3xl italic text-on-surface mb-8">Traveler Echoes</h3>
+          
+          <div className="bg-surface-container-low p-8 border border-outline-variant mb-12">
+            <h4 className="font-headline text-xl mb-6">Leave a Review</h4>
+            <form onSubmit={handleReviewSubmit}>
+              <div className="mb-6 flex items-center gap-2">
+                <span className="text-sm font-medium uppercase tracking-widest text-on-surface-variant">Rating:</span>
+                <div className="flex gap-1 cursor-pointer">
+                  {[1, 2, 3, 4, 5].map(star => (
+                    <span 
+                      key={star} 
+                      onClick={() => setReviewRating(star)}
+                      className={`material-symbols-outlined text-2xl transition-colors ${reviewRating >= star ? 'text-secondary' : 'text-outline-variant hover:text-secondary/50'}`}
+                    >
+                      {reviewRating >= star ? 'star' : 'star_outline'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <textarea 
+                value={reviewText}
+                onChange={(e) => setReviewText(e.target.value)}
+                placeholder="Share your experience at this heritage site..."
+                className="w-full bg-surface border border-outline-variant p-4 text-on-surface focus:outline-none focus:border-primary min-h-[120px] mb-6 resize-none"
+                required
+              />
+              <button 
+                type="submit" 
+                disabled={isSubmittingReview}
+                className="bg-primary text-on-primary px-8 py-3 uppercase tracking-widest text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                {isSubmittingReview ? 'Submitting...' : 'Post Review'}
+              </button>
+            </form>
+          </div>
+
+          {siteData?.local_reviews && siteData.local_reviews.length > 0 ? (
+            <div className="space-y-6">
+              {siteData.local_reviews.map((review) => (
+                <div key={review.id} className="bg-surface-container-lowest p-6 border border-outline-variant/50">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-surface-variant text-on-surface-variant flex items-center justify-center rounded-full font-headline italic text-lg uppercase">
+                        {review.author_name[0]}
+                      </div>
+                      <div>
+                        <p className="font-headline italic text-lg text-on-surface">{review.author_name}</p>
+                        <p className="text-[10px] tracking-widest uppercase text-on-surface-variant">{review.relative_time_description}</p>
+                      </div>
+                    </div>
+                    <div className="flex text-secondary opacity-90 text-sm">
+                      {[1, 2, 3, 4, 5].map(star => (
+                        <span key={star} className="material-symbols-outlined text-[16px]">
+                          {review.rating >= star ? 'star' : 'star_outline'}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="font-light text-on-surface-variant leading-relaxed">"{review.text}"</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-on-surface-variant text-sm italic">Be the first traveler to leave an echo.</p>
+          )}
+        </div>
       </section>
 
       {/* Footer */}

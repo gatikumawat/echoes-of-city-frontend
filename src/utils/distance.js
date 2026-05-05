@@ -1,4 +1,9 @@
 export const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  if (lat1 === null || lon1 === null || lat2 === null || lon2 === null ||
+    lat1 === undefined || lon1 === undefined || lat2 === undefined || lon2 === undefined) {
+    return "0.0";
+  }
+
   const R = 6371; // km
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;

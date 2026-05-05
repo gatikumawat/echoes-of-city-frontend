@@ -54,7 +54,6 @@
 
 // export default RegistrationForm;
 
-
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -77,6 +76,11 @@ const RegistrationForm = () => {
     e.preventDefault();
     setError('');
 
+    if (formData.password.length < 6) {
+      setError('Password must be at least 6 characters long.');
+      return;
+    }
+
     if (formData.password !== formData.confirm_password) {
       setError('Passwords do not match.');
       return;
@@ -85,7 +89,7 @@ const RegistrationForm = () => {
     setIsLoading(true);
     try {
       const axios = await import('axios').then(m => m.default || m);
-      const res = await axios.post(`https://echoes-of-city-backend.onrender.com/api/auth/signup/`, formData, {
+      const res = await axios.post(`${API_BASE_URL}/api/auth/signup/`, formData, {
         headers: { 'Content-Type': 'application/json' },
       });
       const data = res.data;
@@ -103,6 +107,7 @@ const RegistrationForm = () => {
 
       localStorage.setItem('token', data.token);
       localStorage.setItem('user_id', data.user_id);
+      if (data.email) localStorage.setItem('email', data.email);
       navigate('/sites');
     } catch (err) {
       const data = err.response?.data;

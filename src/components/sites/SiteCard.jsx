@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 const SiteCard = ({ imageSrc, imageAlt, typeTag, title, description, url, distance }) => {
   const navigate = useNavigate();
-  
+
   return (
     <div className="flex flex-col bg-white overflow-hidden shadow-sm hover:shadow-xl transition-shadow duration-300">
       <div className="relative h-64 overflow-hidden group">

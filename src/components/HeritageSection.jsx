@@ -12,7 +12,7 @@ const HeritageSection = () => {
             <p className="text-on-surface-variant text-lg">Curated artifacts and architectural blueprints from the Mysore Kingdom era. Each story is a fragment of the city's soul.</p>
           </div>
         </div>
-        
+
         <HeritageCollection />
         <ArchiveCTA />
       </div>

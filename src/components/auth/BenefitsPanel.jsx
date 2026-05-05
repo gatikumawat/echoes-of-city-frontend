@@ -10,13 +10,6 @@ const BenefitsPanel = () => {
         <h3 className="font-headline text-3xl italic leading-tight">Become a Guardian of the Past</h3>
         <div className="space-y-6">
           <div className="flex gap-4">
-            <span className="material-symbols-outlined text-secondary-fixed">bookmark_heart</span>
-            <div>
-              <h4 className="font-label text-sm uppercase tracking-widest mb-1 text-secondary-fixed-dim">Save Favorites</h4>
-              <p className="text-on-primary/70 text-sm leading-relaxed">Curate your personal archive of Bangalore's most evocative historical landmarks and hidden corners.</p>
-            </div>
-          </div>
-          <div className="flex gap-4">
             <span className="material-symbols-outlined text-secondary-fixed">history_edu</span>
             <div>
               <h4 className="font-label text-sm uppercase tracking-widest mb-1 text-secondary-fixed-dim">Share Stories</h4>

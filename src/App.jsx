@@ -6,6 +6,7 @@ import SigninPage from './pages/SigninPage';
 import SitesPage from './pages/SitesPage';
 import SiteDetailsPage from './pages/SiteDetailsPage';
 import MapPage from './pages/MapPage';
+import AboutPage from './pages/AboutPage';
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
         <Route path="/signin" element={<SigninPage />} />
         <Route path="/sites" element={<SitesPage />} />
         <Route path="/map" element={<MapPage />} />
+        <Route path="/about" element={<AboutPage />} />
         <Route path="/site/:id" element={<SiteDetailsPage />} />
       </Routes>
     </BrowserRouter>
